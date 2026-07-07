@@ -69,8 +69,11 @@ public class MediaControlsFactoryImpl implements MediaControlsFactory {
 
     public CompletableFuture<MediaPlayer<RState, RError>> open(Media media, int remotePort, int localPort) {
         return CompletableFuture.supplyAsync(() -> {
+            RemoteControl remoteControl = null;
+            OutgoingController outgoingController = null;
+            IncomingController incomingController = null;
             try {
-                var remoteControl = new RemoteControl.Builder(media.getVideoReferenceUuid())
+                remoteControl = new RemoteControl.Builder(media.getVideoReferenceUuid())
                         .remotePort(remotePort)
                         .port(localPort)
                         .withStatus(true)
@@ -82,65 +85,63 @@ public class MediaControlsFactoryImpl implements MediaControlsFactory {
                 imageCaptureService.setIo(io);
 
                 var sharktopodaState = new SharktopodaState();
-                var outgoingController = new OutgoingController(toolBox, io, sharktopodaState);
-                var incomingController = new IncomingController(toolBox, remoteControl, sharktopodaState);
-                try {
-                    io.send(new OpenCmd(media.getVideoReferenceUuid(), media.getUri().toURL()));
-                } catch (Exception e) {
-                    throw new RuntimeException("Failed to open " + media.getUri(), e);
-                }
+                outgoingController = new OutgoingController(toolBox, io, sharktopodaState);
+                incomingController = new IncomingController(toolBox, remoteControl, sharktopodaState);
+                io.send(new OpenCmd(media.getVideoReferenceUuid(), media.getUri().toURL()));
 
+                final var rc = remoteControl;
+                final var out = outgoingController;
+                final var in = incomingController;
                 return new MediaPlayer<>(media, imageCaptureService, io,
                         () -> {
                             io.send(new CloseCmd(media.getVideoReferenceUuid()));
-                            remoteControl.close();
-                            incomingController.close();
-                            outgoingController.close();
+                            rc.close();
+                            in.close();
+                            out.close();
                             sharktopodaState.setSelectedLocalizations(null);
                         });
             }
             catch (Exception e) {
+                // Release the local UDP port and event bus subscriptions. A leaked
+                // RemoteControl keeps the port bound, so every later open gets a
+                // PlayerIO that silently fails to bind and never receives anything
+                // from Sharktopoda.
+                closeQuietly(remoteControl, incomingController, outgoingController);
                 log.atError().withCause(e).log("Failed to open media " + media.getUri());
                 var i18n = toolBox.getI18nBundle();
-                var title = i18n.getString("mediaplayers.sharktopoda2.error.title");
-                var header = i18n.getString("mediaplayers.sharktopoda2.error.header");
-                var content = i18n.getString("mediaplayers.sharktopoda2.error.content");
+                var title = i18n.getString("mediaplayer.sharktopoda2.error.title");
+                var header = i18n.getString("mediaplayer.sharktopoda2.error.header");
+                var content = i18n.getString("mediaplayer.sharktopoda2.error.content");
                 toolBox.getEventBus().send(new ShowExceptionAlert(title, header, content, e));
                 var io = new NoopVideoIO(media.getVideoName());
                 return new MediaPlayer<>(media, new NoopImageCaptureService(), io, () -> {});
             }
-
-//            var remoteControl = new RemoteControl.Builder(media.getVideoReferenceUuid())
-//                    .remotePort(remotePort)
-//                    .port(localPort)
-//                    .withStatus(true)
-//                    .withMonitoring(true)
-//                    .whenFrameCaptureIsDone(imageCaptureService.getEventBus()::send)
-//                    .build()
-//                    .get();
-//            var io = remoteControl.getVideoIO();
-//            imageCaptureService.setIo(io);
-//
-//
-//            var sharktopodaState = new SharktopodaState();
-//            var outgoingController = new OutgoingController(toolBox, io, sharktopodaState);
-//            var incomingController = new IncomingController(toolBox, remoteControl, sharktopodaState);
-//            try {
-//                io.send(new OpenCmd(media.getVideoReferenceUuid(), media.getUri().toURL()));
-//            }
-//            catch (Exception e) {
-//                throw new RuntimeException("Failed to open " + media.getUri(), e);
-//            }
-//
-//            return new MediaPlayer<>(media, imageCaptureService, io,
-//                    () -> {
-//                        io.send(new CloseCmd(media.getVideoReferenceUuid()));
-//                        remoteControl.close();
-//                        incomingController.close();
-//                        outgoingController.close();
-//                        sharktopodaState.setSelectedLocalizations(null);
-//                    });
-
         });
+    }
+
+    private void closeQuietly(RemoteControl remoteControl,
+                              IncomingController incomingController,
+                              OutgoingController outgoingController) {
+        if (incomingController != null) {
+            try {
+                incomingController.close();
+            } catch (Exception e) {
+                log.atWarn().withCause(e).log("Failed to close IncomingController");
+            }
+        }
+        if (outgoingController != null) {
+            try {
+                outgoingController.close();
+            } catch (Exception e) {
+                log.atWarn().withCause(e).log("Failed to close OutgoingController");
+            }
+        }
+        if (remoteControl != null) {
+            try {
+                remoteControl.close();
+            } catch (Exception e) {
+                log.atWarn().withCause(e).log("Failed to close RemoteControl");
+            }
+        }
     }
 }

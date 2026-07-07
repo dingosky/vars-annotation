@@ -23,7 +23,7 @@ public class CachedMediaService implements MediaService {
     public CachedMediaService(MediaService mediaService) {
         this.mediaService = mediaService;
         mediaCache = Caffeine.newBuilder()
-                .expireAfterWrite(15, TimeUnit.MINUTES)
+                .expireAfterWrite(2, TimeUnit.MINUTES)
                 .maximumSize(100)
                 .buildAsync((key, executor) -> mediaService.findByUuid(key).thenApply(Optional::ofNullable));
     }

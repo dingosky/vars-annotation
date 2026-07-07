@@ -1,8 +1,11 @@
 package org.mbari.vars.annotation.ui.mediaplayers.sharktopoda2;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import org.mbari.vars.annotation.util.Tuple2;
+import org.mbari.vars.vampiresquid.sdk.r1.models.Media;
 import org.mbari.vars.annosaurus.sdk.r1.models.Annotation;
 import org.mbari.vars.annosaurus.sdk.r1.models.Association;
 import org.mbari.vars.annosaurus.sdk.r1.models.BoundingBox;
@@ -29,6 +32,11 @@ public record LocalizedAnnotation(Annotation annotation, Association association
             .create();
 
     private static final Loggers log = new Loggers(LocalizedAnnotation.class);
+
+    private static final Cache<UUID, Optional<Media>> mediaCache = Caffeine.newBuilder()
+            .maximumSize(500)
+            .expireAfterWrite(Duration.ofMinutes(2))
+            .build();
 
     /**
      * Builds the localization from the annotation and association. Always returns a new instance
@@ -74,26 +82,40 @@ public record LocalizedAnnotation(Annotation annotation, Association association
                 return true;
             }
             else {
-                try {
-                    var annotationMedia = toolBox.getServices()
-                            .mediaService()
-                            .findByUuid(annotation.getVideoReferenceUuid())
-                            .get(10, TimeUnit.SECONDS);
-                    return annotationMedia != null &&
-                        annotationMedia.getStartTimestamp().equals(currentMedia.getStartTimestamp()) &&
-                        annotationMedia.getWidth() != null &&
-                        annotationMedia.getWidth().equals(currentMedia.getWidth()) &&
-                        annotationMedia.getHeight() != null &&
-                        annotationMedia.getHeight().equals(currentMedia.getHeight());
-                }
-                catch (Exception e) {
-                    log.atInfo()
-                            .withCause(e)
-                            .log(() -> "Unable to look up media with videoReferenceUuid=" + annotation.getVideoReferenceUuid());
-                }
+                return lookupMedia(toolBox, annotation.getVideoReferenceUuid())
+                        .map(annotationMedia ->
+                                annotationMedia.getStartTimestamp().equals(currentMedia.getStartTimestamp()) &&
+                                annotationMedia.getWidth() != null &&
+                                annotationMedia.getWidth().equals(currentMedia.getWidth()) &&
+                                annotationMedia.getHeight() != null &&
+                                annotationMedia.getHeight().equals(currentMedia.getHeight()))
+                        .orElse(false);
             }
         }
         return false;
+    }
+
+    /**
+     * Media lookups happen once per localization, in loops, on latency-sensitive threads
+     * (the event bus, often the FX thread, during full localization reloads). Cache them
+     * per videoReferenceUuid — including failures: when the media service is unreachable,
+     * retrying for every localization would stall the caller up to 10 seconds each time.
+     */
+    private static Optional<Media> lookupMedia(UIToolBox toolBox, UUID videoReferenceUuid) {
+        return mediaCache.get(videoReferenceUuid, uuid -> {
+            try {
+                return Optional.ofNullable(toolBox.getServices()
+                        .mediaService()
+                        .findByUuid(uuid)
+                        .get(10, TimeUnit.SECONDS));
+            }
+            catch (Exception e) {
+                log.atInfo()
+                        .withCause(e)
+                        .log(() -> "Unable to look up media with videoReferenceUuid=" + uuid);
+                return Optional.empty();
+            }
+        });
     }
 
     /**

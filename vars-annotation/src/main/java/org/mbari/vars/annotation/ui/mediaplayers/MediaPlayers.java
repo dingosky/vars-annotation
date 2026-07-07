@@ -1,5 +1,6 @@
 package org.mbari.vars.annotation.ui.mediaplayers;
 
+import io.reactivex.rxjava3.schedulers.Schedulers;
 import org.mbari.vars.annotation.etc.rxjava.EventBus;
 import org.mbari.vars.annotation.ui.UIToolBox;
 import org.mbari.vars.annotation.ui.events.ForceReloadLocalizationsEvent;
@@ -22,15 +23,24 @@ public class MediaPlayers {
 
     private final UIToolBox toolBox;
     private final Loggers log = new Loggers(getClass());
-    private final ServiceLoader<MediaControlsFactory> serviceLoader;
+    private final List<MediaControlsFactory> factories;
     private final Object lock = new byte[]{};
 
     public MediaPlayers(UIToolBox toolBox) {
+        this(toolBox, loadFactories());
+    }
+
+    public MediaPlayers(UIToolBox toolBox, List<MediaControlsFactory> factories) {
         this.toolBox = toolBox;
-        serviceLoader = ServiceLoader.load(MediaControlsFactory.class, Thread.currentThread().getContextClassLoader());
+        this.factories = factories;
         EventBus eventBus = toolBox.getEventBus();
+        // MediaChangedEvent is often sent from the JavaFX application thread, but
+        // opening a media blocks on UDP round trips to the video player. Hop to a
+        // background thread so the UI stays responsive. observeOn delivers events
+        // in order on a single worker, so opens don't interleave.
         eventBus.toObserverable()
                 .ofType(MediaChangedEvent.class)
+                .observeOn(Schedulers.from(toolBox.getExecutorService()))
                 .subscribe(e -> open(e.get()));
 
         // Convert MediaControlsChangedEvent to MediaPlayerChangedEvent so that I don't have
@@ -45,12 +55,14 @@ public class MediaPlayers {
                 .addShutdownHook(new Thread(this::close));
     }
 
+    private static List<MediaControlsFactory> loadFactories() {
+        var serviceLoader = ServiceLoader.load(MediaControlsFactory.class,
+                Thread.currentThread().getContextClassLoader());
+        return Streams.toStream(serviceLoader.iterator()).toList();
+    }
+
     public List<SettingsPane> getSettingsPanes() {
-        log.atWarn().log("Loading MediaControlsFactories");
-//        for (var factory : serviceLoader) {
-//            log.warn("Discovered MediaControlsFactory: {}", factory.getClass().getName());
-//        }
-        return Streams.toStream(serviceLoader.iterator())
+        return factories.stream()
                 .map(MediaControlsFactory::getSettingsPane)
                 .filter(Objects::nonNull)
                 .toList();
@@ -64,10 +76,9 @@ public class MediaPlayers {
             var eventBus = toolBox.getEventBus();
 
             try {
-                Streams.toStream(serviceLoader.iterator())
-                        .peek(factory -> log.atDebug().log(() -> "ServiceLoader found a factory: " + factory))
+                factories.stream()
                         .filter(factory -> factory.canOpen(media))
-                        .peek(factory -> log.atDebug().log(() -> "ServiceLoader using a factory: " + factory))
+                        .peek(factory -> log.atDebug().log(() -> "Opening " + media.getUri() + " using factory: " + factory))
                         .findFirst()
                         .ifPresent(factory -> {
                             try {

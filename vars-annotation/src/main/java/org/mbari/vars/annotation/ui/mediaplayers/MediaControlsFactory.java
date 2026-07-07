@@ -5,11 +5,9 @@ import org.mbari.vars.vampiresquid.sdk.r1.models.Media;
 import org.mbari.vcr4j.VideoError;
 import org.mbari.vcr4j.VideoState;
 
+import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * @author Brian Schlining
@@ -37,45 +35,45 @@ public interface MediaControlsFactory {
      */
     CompletableFuture<MediaControls<? extends VideoState, ? extends VideoError>> open(Media media);
 
-//    default MediaControls<? extends VideoState, ? extends VideoError> safeOpen(Media media) {
-//        var ref = new AtomicReference<MediaControls<? extends VideoState, ? extends VideoError>>();
-//        if (canOpen(media)) {
-//            try {
-//                return open(media).get(10, TimeUnit.SECONDS);
-//            } catch (Exception e) {
-//                throw new RuntimeException("Failed to open " + media + " using " + this, e);
-//            }
-//        }
-//        else {
-//            throw new RuntimeException(getClass().getName() + " is unable to open media");
-//        }
-//    }
-
     default MediaControls<? extends VideoState, ? extends VideoError> safeOpen(Media media) {
+        return safeOpen(media, Duration.ofSeconds(10));
+    }
+
+    default MediaControls<? extends VideoState, ? extends VideoError> safeOpen(Media media, Duration timeout) {
         if (!canOpen(media)) {
             throw new RuntimeException(getClass().getName() + " is unable to open media");
         }
 
-        try {
-            if (Platform.isFxApplicationThread()) {
-                // Already on FX thread → no wrapping needed
-                return open(media).get(10, TimeUnit.SECONDS);
-            }
-
-            CompletableFuture<MediaControls<? extends VideoState, ? extends VideoError>> future =
-                    new CompletableFuture<>();
-
+        CompletableFuture<MediaControls<? extends VideoState, ? extends VideoError>> future;
+        if (Platform.isFxApplicationThread()) {
+            future = open(media);
+        }
+        else {
+            // Call open() on the FX thread (implementations may build JavaFX controls)
+            // but never block the FX thread waiting for the open to complete
+            var onFxThread =
+                    new CompletableFuture<CompletableFuture<MediaControls<? extends VideoState, ? extends VideoError>>>();
             Platform.runLater(() -> {
                 try {
-                    future.complete(open(media).get());
+                    onFxThread.complete(open(media));
                 } catch (Throwable t) {
-                    future.completeExceptionally(t);
+                    onFxThread.completeExceptionally(t);
                 }
             });
+            future = onFxThread.thenCompose(f -> f);
+        }
 
-            return future.get(10, TimeUnit.SECONDS);
-
+        try {
+            return future.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
         } catch (Exception e) {
+            // If the open completes after we've given up, nobody will ever close the
+            // MediaPlayer. An orphaned player keeps resources (e.g. sharktopoda2's
+            // local UDP port) that break every subsequent open, so close it on arrival.
+            future.thenAccept(mediaControls -> {
+                if (mediaControls != null && mediaControls.getMediaPlayer() != null) {
+                    mediaControls.getMediaPlayer().close();
+                }
+            });
             throw new RuntimeException("Failed to open " + media + " using " + this, e);
         }
     }

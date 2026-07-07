@@ -1,5 +1,6 @@
 package org.mbari.vars.annotation.ui.mediaplayers.sharktopoda2;
 
+import io.reactivex.rxjava3.schedulers.Schedulers;
 import org.mbari.vars.annotation.etc.jdk.Loggers;
 import org.mbari.vars.annotation.etc.rxjava.EventBus;
 import org.mbari.vars.annotation.services.ImageCaptureService;
@@ -7,6 +8,7 @@ import org.mbari.vars.annotation.model.Framegrab;
 import org.mbari.vcr4j.VideoIndex;
 import org.mbari.vcr4j.remote.control.commands.FrameCaptureCmd;
 import org.mbari.vcr4j.remote.control.commands.FrameCaptureDoneCmd;
+import org.mbari.vcr4j.remote.control.commands.RResponse;
 
 import org.mbari.vcr4j.remote.control.RVideoIO;
 
@@ -58,13 +60,25 @@ public class ImageCaptureServiceImpl implements ImageCaptureService {
             // io.send() were called first it would block for up to 1 second waiting
             // for Sharktopoda's ACK, during which the done event could be emitted with
             // no subscriber — permanently lost.
+            var imageReferenceUuid = UUID.randomUUID();
             var future = new CompletableFuture<Framegrab>();
             eventBus.toObserverable()
                     .ofType(FrameCaptureDoneCmd.class)
+                    // Only the done command for THIS capture counts. A stale done from an
+                    // earlier capture (e.g. one that timed out and arrived late) points
+                    // at the wrong image.
+                    .filter(cmd -> imageReferenceUuid.equals(cmd.getValue().getImageReferenceUuid()))
+                    .take(1)
+                    // The done command is delivered by PlayerIO's single UDP receive
+                    // thread, which must not be tied up reading the image off disk:
+                    // Sharktopoda is still waiting for the UDP response, and any other
+                    // incoming datagrams would back up and get dropped. Hop to an io
+                    // thread before decoding.
+                    .observeOn(Schedulers.io())
                     .map(this::captureDone)
                     .timeout(10, TimeUnit.SECONDS)
                     .subscribe(future::complete, future::completeExceptionally);
-            io.send(new FrameCaptureCmd(io.getUuid(), UUID.randomUUID(), file.getAbsolutePath()));
+            io.send(new FrameCaptureCmd(io.getUuid(), imageReferenceUuid, file.getAbsolutePath()));
             try {
                 return future.get(11, TimeUnit.SECONDS);
             }
@@ -79,6 +93,10 @@ public class ImageCaptureServiceImpl implements ImageCaptureService {
 
     public final Framegrab captureDone(FrameCaptureDoneCmd cmd) {
         var request = cmd.getValue();
+        if (RResponse.FAILED.equalsIgnoreCase(request.getStatus())) {
+            throw new RuntimeException("Sharktopoda reported that the frame capture to "
+                    + request.getImageLocation() + " failed");
+        }
         var elapsedTime = Duration.ofMillis(request.getElapsedTimeMillis());
         var videoIndex = new VideoIndex(elapsedTime);
         BufferedImage image = null;
