@@ -6,6 +6,7 @@ import org.mbari.vars.annotation.services.noop.*;
 import org.mbari.vars.annotation.services.oni.ModifyingConceptService;
 import org.mbari.vars.annotation.services.oni.PreferencesFactory;
 import org.mbari.vars.annotation.services.oni.WebPreferencesFactory;
+import org.mbari.vars.annotation.services.vampiresquid.CachedMediaService;
 import org.mbari.vars.oni.sdk.r1.*;
 import org.mbari.vars.vampiresquid.sdk.r1.NoopMediaService;
 
@@ -35,7 +36,8 @@ public class VarsServiceFactory implements ServiceFactory {
         var serviceBuilder = new ServiceBuilder(true);
         var annosaurusClient = serviceBuilder.getAnnotationService();
         var oniClient = serviceBuilder.getConceptService();
-        var vampireSquidClient = serviceBuilder.getMediaService();
+        // Cache media lookups. AppController clears this cache on ReloadServicesMsg.
+        var vampireSquidClient = new CachedMediaService(serviceBuilder.getMediaService());
         var panoptesClient = serviceBuilder.getImageArchiveService();
 
         // The concept service has a lot of parts. We cache data and filter out unwanted link templates

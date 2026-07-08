@@ -71,7 +71,7 @@ public class OutgoingController {
      */
     private void forceReload() {
         io.send(new ClearLocalizationsCmd(new ClearLocalizationsCmd.Request(io.getUuid())));
-        handle(toolBox.getData().getAnnotations(), Action.Add);
+        handle(AnnotationSnapshots.snapshot(toolBox), Action.Add);
     }
 
     private void handle(Collection<Annotation> annotations, Action action) {

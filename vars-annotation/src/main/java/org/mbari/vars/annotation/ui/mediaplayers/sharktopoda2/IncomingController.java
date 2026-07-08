@@ -8,6 +8,7 @@ import org.mbari.vars.annotation.ui.commands.CreateAnnotationAtIndexWithAssociat
 import org.mbari.vars.annotation.ui.commands.DeleteAssociationsCmd;
 import org.mbari.vars.annotation.ui.commands.UpdateAssociationCmd;
 import org.mbari.vars.annotation.ui.events.AnnotationsSelectedEvent;
+import org.mbari.vars.annotation.ui.mediaplayers.sharktopoda.Constants;
 import org.mbari.vcr4j.VideoIndex;
 import org.mbari.vcr4j.remote.control.RemoteControl;
 import org.mbari.vcr4j.remote.control.commands.localization.*;
@@ -143,7 +144,10 @@ public class IncomingController {
                 .map(LocalizationPair::localizedAnnotation)
                 .map(LocalizedAnnotation::annotation)
                 .toList();
-        var cmd = new AnnotationsSelectedEvent(this, selectedAnnotations);
+        // Tag the event so OutgoingController does not echo the selection back to
+        // Sharktopoda. The echo can expand to a different set of localizations (an
+        // annotation may have several bounding boxes) and the apps re-select at each other.
+        var cmd = new AnnotationsSelectedEvent(Constants.LOCALIZATION_EVENT_SOURCE, selectedAnnotations);
         toolBox.getEventBus().send(cmd);
     }
 
@@ -155,8 +159,7 @@ public class IncomingController {
     }
 
     private List<LocalizationPair> search(List<Localization> xs) {
-        var existingBoxes = toolBox.getData()
-                .getAnnotations()
+        var existingBoxes = AnnotationSnapshots.snapshot(toolBox)
                 .stream()
                 .flatMap(anno -> LocalizedAnnotation.from(anno).stream())
                 .sorted(comparator)

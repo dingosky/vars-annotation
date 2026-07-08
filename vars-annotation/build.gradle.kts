@@ -16,11 +16,11 @@ plugins {
     id("org.openjfx.javafxplugin") version "0.1.0"
     id("com.github.ben-manes.versions") version "0.54.0"
     id("com.adarshr.test-logger") version "4.0.0"
-    id("org.beryx.jlink") version "3.2.1"
-    id("org.gradlex.extra-java-module-info") version "1.14"
+    id("org.beryx.jlink") version "4.0.2"
+    id("org.gradlex.extra-java-module-info") version "1.14.2"
 }
 
-version = "2.4.0"
+version = "2.4.1"
 
 java {
     toolchain {
@@ -65,8 +65,8 @@ val gsonVerion = "2.14.0"
 val ikonliVersion = "12.3.1"
 val imgfxVersion = "0.0.17"
 val jeromqVersion = "0.6.0"
-val logbackVersion = "1.5.34"
-val mbariCommonsVersion = "0.0.7"
+val logbackVersion = "1.5.37"
+val mbariCommonsVersion = "0.0.8"
 val methanolVersion = "1.9.0"
 val okhttpLoggingInterceptorVersion = "3.14.4"
 val oniSdkVersion = "0.0.12"
@@ -74,7 +74,7 @@ val razielSdkVersion = "0.0.7"
 val slf4jVersion = "2.0.17"
 val swingxVersion = "1.6.5-1"
 val vampireSquidSdkVersion = "0.0.15"
-val vcr4jVersion = "5.3.1"
+val vcr4jVersion = "5.3.6"
 
 
 
