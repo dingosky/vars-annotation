@@ -15,11 +15,14 @@ import org.mbari.vcr4j.VideoError;
 import org.mbari.vcr4j.VideoState;
 import org.mbari.vcr4j.remote.control.RError;
 import org.mbari.vcr4j.remote.control.RState;
+import org.mbari.vcr4j.remote.control.RVideoIO;
 import org.mbari.vcr4j.remote.control.RemoteControl;
 import org.mbari.vcr4j.remote.control.commands.CloseCmd;
 import org.mbari.vcr4j.remote.control.commands.OpenCmd;
 
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 public class MediaControlsFactoryImpl implements MediaControlsFactory {
 
@@ -94,7 +97,7 @@ public class MediaControlsFactoryImpl implements MediaControlsFactory {
                 final var in = incomingController;
                 return new MediaPlayer<>(media, imageCaptureService, io,
                         () -> {
-                            io.send(new CloseCmd(media.getVideoReferenceUuid()));
+                            sendClose(io, media.getVideoReferenceUuid());
                             rc.close();
                             in.close();
                             out.close();
@@ -117,6 +120,36 @@ public class MediaControlsFactoryImpl implements MediaControlsFactory {
                 return new MediaPlayer<>(media, new NoopImageCaptureService(), io, () -> {});
             }
         });
+    }
+
+    /**
+     * Send the CloseCmd and wait until it has actually been dispatched. The command
+     * subject is serialized: when another thread is mid-send (the monitoring decorator
+     * requests the index every 333 ms, holding the emitter loop for a full UDP round
+     * trip), send() just queues the command and returns. Tearing down the RemoteControl
+     * right away would drop the queued CloseCmd and the video would stay open in
+     * Sharktopoda. Subscribers see a command after RVideoIO's internal sender has
+     * transmitted it, so observing it here means the datagram is on the wire.
+     */
+    private void sendClose(RVideoIO io, UUID videoReferenceUuid) {
+        if (io.isClosed()) {
+            return;
+        }
+        var dispatched = new CompletableFuture<Void>();
+        var disposable = io.getCommandSubject()
+                .ofType(CloseCmd.class)
+                .subscribe(cmd -> dispatched.complete(null));
+        try {
+            io.send(new CloseCmd(videoReferenceUuid));
+            dispatched.get(5, TimeUnit.SECONDS);
+        }
+        catch (Exception e) {
+            log.atWarn().withCause(e)
+                    .log("The close command for " + videoReferenceUuid + " may not have reached the video player");
+        }
+        finally {
+            disposable.dispose();
+        }
     }
 
     private void closeQuietly(RemoteControl remoteControl,
