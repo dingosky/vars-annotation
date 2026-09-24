@@ -22,7 +22,7 @@ public class OutgoingController {
     private final SharktopodaState sharktopodaState;
     private volatile boolean openDone = false;
     private enum Action {
-        Add, Clear, Remove, Select, Update
+        Add, Remove, Select, Update
     }
 
     public OutgoingController(UIToolBox toolBox,
